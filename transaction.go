@@ -17,14 +17,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/gorilla/mux"
+	"io"
 	"log"
+	"maunium.net/go/mautrix/appservice"
 	"net/http"
 	"strings"
-
-	"github.com/gorilla/mux"
-	"maunium.net/go/mautrix/appservice"
 )
 
 var (
@@ -114,13 +115,6 @@ func putTransaction(w http.ResponseWriter, r *http.Request) {
 
 	// Reset body for re-use
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
-	// Parse the transaction
-	var txn appservice.Transaction
-	az := readTransaction(w, r, &txn)
-	if az == nil {
-		return
-	}
 
 	var txn appservice.Transaction
 	az := readTransaction(w, r, &txn)
