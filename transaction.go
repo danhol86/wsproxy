@@ -17,15 +17,14 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/gorilla/mux"
-	"io"
 	"log"
-	"maunium.net/go/mautrix/appservice"
 	"net/http"
 	"strings"
+
+	"github.com/gorilla/mux"
+	"maunium.net/go/mautrix/appservice"
 )
 
 var (
@@ -103,19 +102,6 @@ func writeTransaction(w http.ResponseWriter, az *AppService, txnName, logContent
 }
 
 func putTransaction(w http.ResponseWriter, r *http.Request) {
-
-	// Read and log full body
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		log.Printf("Error reading body: %v", err)
-		http.Error(w, "failed to read body", http.StatusInternalServerError)
-		return
-	}
-	log.Printf("Body: %s\n", string(bodyBytes))
-
-	// Reset body for re-use
-	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-
 	var txn appservice.Transaction
 	az := readTransaction(w, r, &txn)
 	if az == nil {
