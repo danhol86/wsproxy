@@ -22,6 +22,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"maunium.net/go/mautrix/appservice"
@@ -53,6 +54,11 @@ var (
 		ErrorCode:  "FI.MAU.WS_NOT_CONNECTED",
 		Message:    "Endpoint is not connected to websocket",
 	}
+	errNoAck = appservice.Error{
+		HTTPStatus: http.StatusGatewayTimeout,
+		ErrorCode:  "FI.MAU.WS_NO_ACK",
+		Message:    "No acknowledgement from websocket",
+	}
 )
 
 func readTransaction(w http.ResponseWriter, r *http.Request, into interface{}) *AppService {
@@ -81,9 +87,17 @@ func readTransaction(w http.ResponseWriter, r *http.Request, into interface{}) *
 	return az
 }
 
-func writeTransaction(w http.ResponseWriter, az *AppService, txnName, logContent string, payload interface{}) {
-	conn := az.Conn()
-	if conn != nil {
+func writeTransaction(w http.ResponseWriter, az *AppService, txnName, logContent string, payload interface{}, txnID string) {
+	az.createAck(txnID)
+	defer az.acknowledge(txnID)
+	for {
+		conn := az.Conn()
+		if conn == nil {
+			log.Printf("Rejecting %s to %s: websocket not connected", txnName, az.ID)
+			errNotConnected.Write(w)
+			return
+		}
+
 		az.writeLock.Lock()
 		log.Printf("Sending %s to %s containing %s", txnName, az.ID, logContent)
 		err := conn.WriteJSON(payload)
@@ -91,13 +105,16 @@ func writeTransaction(w http.ResponseWriter, az *AppService, txnName, logContent
 		if err != nil {
 			log.Printf("Rejecting %s to %s: %v", txnName, az.ID, err)
 			errSendFail.Write(w)
-		} else {
+			return
+		}
+
+		if az.waitAck(txnID, 30*time.Second) {
 			log.Printf("Sent %s to %s successfully", txnName, az.ID)
 			appservice.WriteBlankOK(w)
+			return
 		}
-	} else {
-		log.Printf("Rejecting %s to %s: websocket not connected", txnName, az.ID)
-		errNotConnected.Write(w)
+
+		log.Printf("No ack for %s from %s, retrying", txnName, az.ID)
 	}
 }
 
@@ -129,7 +146,7 @@ func putTransaction(w http.ResponseWriter, r *http.Request) {
 		Status:      "ok",
 		TxnID:       txnID,
 		Transaction: txn,
-	})
+	}, txnID)
 }
 
 type SyncProxyError struct {
@@ -153,5 +170,5 @@ func putSyncProxyError(w http.ResponseWriter, r *http.Request) {
 			Error: txn,
 			TxnID: txnID,
 		},
-	})
+	}, txnID)
 }

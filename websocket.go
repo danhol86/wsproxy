@@ -30,18 +30,55 @@ import (
 	"maunium.net/go/mautrix/appservice"
 )
 
+type AckData struct {
+	TxnID string `json:"txn_id"`
+}
+
 type AppService struct {
 	ID string `yaml:"id"`
 	AS string `yaml:"as"`
 	HS string `yaml:"hs"`
 
-	conn      *websocket.Conn `yaml:"-"`
-	connLock  sync.Mutex      `yaml:"-"`
-	writeLock sync.Mutex      `yaml:"-"`
+	conn      *websocket.Conn          `yaml:"-"`
+	connLock  sync.Mutex               `yaml:"-"`
+	writeLock sync.Mutex               `yaml:"-"`
+	ackLock   sync.Mutex               `yaml:"-"`
+	acks      map[string]chan struct{} `yaml:"-"`
 }
 
 func (az *AppService) Conn() *websocket.Conn {
 	return az.conn
+}
+
+func (az *AppService) createAck(txnID string) {
+	ch := make(chan struct{})
+	az.ackLock.Lock()
+	az.acks[txnID] = ch
+	az.ackLock.Unlock()
+}
+
+func (az *AppService) acknowledge(txnID string) {
+	az.ackLock.Lock()
+	if ch, ok := az.acks[txnID]; ok {
+		close(ch)
+		delete(az.acks, txnID)
+	}
+	az.ackLock.Unlock()
+}
+
+func (az *AppService) waitAck(txnID string, timeout time.Duration) bool {
+	az.ackLock.Lock()
+	ch, ok := az.acks[txnID]
+	az.ackLock.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 const CloseConnReplaced = 4001
@@ -76,6 +113,11 @@ func syncWebsocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		az.connLock.Unlock()
+		az.ackLock.Lock()
+		for id := range az.acks {
+			delete(az.acks, id)
+		}
+		az.ackLock.Unlock()
 		_ = ws.Close()
 	}()
 	err = ws.WriteMessage(websocket.TextMessage, []byte(`{"status": "connected"}`))
@@ -153,12 +195,17 @@ func actuallyHandleCommand(az *AppService, msg *appservice.WebsocketCommand) (re
 		if err != nil {
 			log.Println("Error forwarding", az.ID, "sync proxy start request:", err)
 		}
+	case "ack":
+		var ack AckData
+		if err = json.Unmarshal(msg.Data, &ack); err == nil {
+			az.acknowledge(ack.TxnID)
+		}
 	case "ping":
 		var req PingData
 		jsonErr := json.Unmarshal(msg.Data, &req)
 		now := time.Now()
 		if req.Timestamp > 0 {
-			pingStart := time.Unix(0, req.Timestamp * int64(time.Millisecond))
+			pingStart := time.Unix(0, req.Timestamp*int64(time.Millisecond))
 			log.Printf("Received ping from %s in %s", az.ID, now.Sub(pingStart))
 		} else {
 			log.Printf("Received ping from %s with no timestamp (json error: %v)", az.ID, jsonErr)
