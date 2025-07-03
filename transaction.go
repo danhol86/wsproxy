@@ -88,6 +88,12 @@ func readTransaction(w http.ResponseWriter, r *http.Request, into interface{}) *
 }
 
 func writeTransaction(w http.ResponseWriter, az *AppService, txnName, logContent string, payload interface{}, txnID string) {
+	if az.Conn() == nil {
+		log.Printf("Queuing %s for %s until websocket connects", txnName, az.ID)
+		az.enqueue(queuedTxn{name: txnName, logContent: logContent, payload: payload, txnID: txnID})
+		appservice.WriteBlankOK(w)
+		return
+	}
 	az.createAck(txnID)
 	defer az.acknowledge(txnID)
 	for {
