@@ -34,6 +34,13 @@ type AckData struct {
 	TxnID string `json:"txn_id"`
 }
 
+type queuedTxn struct {
+	name       string
+	logContent string
+	payload    interface{}
+	txnID      string
+}
+
 type AppService struct {
 	ID string `yaml:"id"`
 	AS string `yaml:"as"`
@@ -44,6 +51,9 @@ type AppService struct {
 	writeLock sync.Mutex               `yaml:"-"`
 	ackLock   sync.Mutex               `yaml:"-"`
 	acks      map[string]chan struct{} `yaml:"-"`
+
+	queueLock sync.Mutex  `yaml:"-"`
+	queue     []queuedTxn `yaml:"-"`
 }
 
 func (az *AppService) Conn() *websocket.Conn {
@@ -78,6 +88,56 @@ func (az *AppService) waitAck(txnID string, timeout time.Duration) bool {
 		return true
 	case <-time.After(timeout):
 		return false
+	}
+}
+
+func (az *AppService) enqueue(txn queuedTxn) {
+	az.queueLock.Lock()
+	az.queue = append(az.queue, txn)
+	az.queueLock.Unlock()
+}
+
+func (az *AppService) sendQueued(txn queuedTxn) {
+	az.createAck(txn.txnID)
+	defer az.acknowledge(txn.txnID)
+	for {
+		conn := az.Conn()
+		if conn == nil {
+			time.Sleep(time.Second)
+			continue
+		}
+
+		az.writeLock.Lock()
+		log.Printf("Sending queued %s to %s containing %s", txn.name, az.ID, txn.logContent)
+		err := conn.WriteJSON(txn.payload)
+		az.writeLock.Unlock()
+		if err != nil {
+			log.Printf("Failed to send queued %s to %s: %v", txn.name, az.ID, err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		if az.waitAck(txn.txnID, 30*time.Second) {
+			log.Printf("Sent queued %s to %s successfully", txn.name, az.ID)
+			return
+		}
+
+		log.Printf("No ack for %s from %s, retrying", txn.name, az.ID)
+	}
+}
+
+func (az *AppService) flushQueue() {
+	for {
+		az.queueLock.Lock()
+		if len(az.queue) == 0 {
+			az.queueLock.Unlock()
+			return
+		}
+		txn := az.queue[0]
+		az.queue = az.queue[1:]
+		az.queueLock.Unlock()
+
+		az.sendQueued(txn)
 	}
 }
 
@@ -134,6 +194,7 @@ func syncWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 	az.conn = ws
 	az.connLock.Unlock()
+	go az.flushQueue()
 	for {
 		var msg appservice.WebsocketCommand
 		err = ws.ReadJSON(&msg)
