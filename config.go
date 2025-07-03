@@ -106,6 +106,7 @@ func loadConfig() {
 		} else if len(az.AS) == 0 {
 			log.Fatalf("Appservice %s doesn't have the HS token set", az.ID)
 		}
+		az.acks = make(map[string]chan struct{})
 		cfg.byASToken[az.AS] = az
 		cfg.byHSToken[az.HS] = az
 	}
