@@ -1,0 +1,4 @@
+echo [class token] | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+
+docker build -t ghcr.io/danhol86/wsproxy:latest .
+docker push ghcr.io/danhol86/wsproxy:latest
